@@ -1,0 +1,154 @@
+---
+title: "Practical Machine Learning Final Project"
+author: "J. Nick Fisk"
+date: "September 24, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Learning with SVMs
+
+This is my submission for the Coursera Course Practical Machine Learning. To my peer reviewer(s), please forgive the sloppy nature of the document as I have never used Rmarkdown before.
+
+#Loading Packages and Reading in Data
+```{r data}
+library("caret")
+library("e1071")
+library("kernlab")
+#read in data
+train<-read.csv("pml-training.csv")
+#set seed
+set.seed(6546)
+```
+#Abnormality Check
+Next, manually inspect the training data for abnormailites, such as NA values.
+```{r pleasework }
+for(i in 1:ncol(train)){
+	hold<-(sum(is.na(train[,i]))/nrow(train))
+	if(hold!=0){
+		print(paste0("Col# ",i," has ",hold, " proportion of NAs"))
+	}
+}
+```
+There seems to be quite a bit of missing data. Furthermore, the missing data seems to be non-random and likely to be highly correlated. Since NA values may through off our results and the missing data seems to be correlated (which will be checked here shortly), lets assign a value of 0 to all missing data.
+
+```{r replaceAll}
+train2<-train
+train2[is.na(train2)]<-0
+```
+#Data quantification, conversion, and feature reduction
+Next, I wanted to check the amount of data to see if there was enough to generate a validation set, in addition to the test set provided. 
+
+```{r count}
+nrow(train2)
+```
+That seems like more than enough to split the data again to include a validation set.
+
+The SVM method/correlation method requires all data to be in numeric form, but the data is currently integer data. Conversion is necessary to proceed.
+```{r data convert}
+train3<-train2
+for(i in 1:(ncol(train3)-1)){
+  train3[,i]<-as.numeric(train3[,i])
+}
+#free some memory while we are at it
+train<-NULL
+train2<-NULL
+```
+
+When a kernlab based linear SVM (in caret) was tried at this point, it required too much RAM (on a machine with 8GB). Feature reduction seemed like a prudent next step.
+```{r doCore}
+corMat<-cor(train3[,1:(ncol(train3)-1)])
+highCor2 <- findCorrelation(corMat, cutoff=0.75)
+train4<-train3[,-highCor2]
+ncol(train3)
+ncol(train4)
+#free some memory
+train3<-NULL
+
+```
+I removed all features with an absolute correlation over 75% which greatly reduces the number of features for the algorithm to process (by over half!)
+
+
+Next, since the data seems ordered, it must be shuffled before it is split.
+```{r shuffle}
+numToTry<-floor(nrow(train4)*.75) #~75% train, 25% verify
+trainInd<-sample(1:nrow(train4),numToTry)
+testInd<-which(!1:nrow(train4) %in% trainInd)
+length(trainInd)
+length(testInd)
+Vtrain<-train4[trainInd,]
+valid<-train4[testInd,]
+```
+#Model building and testing
+That should do it for the partitioning of data. The problem is a classification based problem in a domain of relatively tight values. A support vector machine seems like a great candidate for constructing a predictive model, since it is a soft-margin classifier. 
+
+Starting with the linear kernel...
+```{r modelBuild}
+attach(Vtrain)
+model<-train(classe ~., data=Vtrain,method='svmLinear')
+trPred<-predict(model,Vtrain)
+tePred<-predict(model,valid)
+sum(trPred==Vtrain$classe)/length(trPred)
+total<-sum(tePred==valid$classe)/length(tePred)
+print(total)
+```
+Great! Just to be sure, lets use the confusionMatrix function to make sure everything went through well. 
+
+```{r confuse}
+confusionMatrix(predict(model,Vtrain),Vtrain$classe)
+confusionMatrix(predict(model,valid),valid$classe)
+```
+
+Looks great, accuracy of 100%! But lets do some k-fold validation to make sure. 5 times (total) should do it.
+```{r kfold}
+for(i in 1:4){
+  trainInd<-sample(1:nrow(train4),numToTry)
+  testInd<-which(!1:nrow(train4) %in% trainInd)
+  valid<-train4[testInd,]
+  Vtrain<-train4[trainInd,]
+  model<-train(classe ~., data=Vtrain,method='svmLinear')
+  tePred<-predict(model,valid)
+  total<-total+sum(tePred==valid$classe)/length(tePred)
+}
+#Get the average accuracy
+total/5
+```
+Looks good, every k-fold partition is getting 100% accuracy, making in-sample and out-sample error non-existant, though there are still reported confidence intervals. Time to apply the model to the test data for the quiz!
+
+#Testing
+Read in the data
+```{r testRead}
+testFinal<-read.csv("pml-testing.csv")
+#store the IDs for reference for the quiz.
+tID<-testFinal[,ncol(testFinal)]
+```
+
+The model no longer supports many of the features present in the test data. They need to be removed.
+```{r removeFeaturesTest}
+testFinal2<-testFinal[which(colnames(testFinal)%in%colnames(train4))]
+ncol(train4)
+ncol(testFinal2) #one less is fine, as that is the classe column
+testFinal<-NULL
+```
+Likewise, all the data that was fed into the SVM to build the model was numeric, where as some of this test data is considered integer. Conversion is necessary. Simularly, we must replace all the missing data with 0s, as done earlier. 
+
+```{r testConvert}
+testFinal3<-testFinal2
+testFinal3[is.na(testFinal3)]<-0
+
+for(i in 1:ncol(testFinal3)){
+  testFinal3[,i]<-as.numeric(testFinal3[,i])
+}
+testFinal2<-NULL
+```
+
+Finally, we are ready to predict the results.
+```{r testPredict}
+toFile<-predict(model,testFinal3)
+#B A B A A E D B A A B C B A E E A B B B
+```
+
+And there it is! Things went rather smoothly, all things considered, and I didn't really need to do any visualization to get a handle on the data. SVMs seemed like a natural choice for classification problem like this and they worked perfectly, so I didn't need to do a lot of experimenting. I did try naively with all features, but never had enough RAM. Thanks for your time and feedback!
